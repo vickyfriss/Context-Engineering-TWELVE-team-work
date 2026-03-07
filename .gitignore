@@ -2,3 +2,5 @@
 *.env
 __pycache__/
 /raw data/
+# Ignore all Parquet files
+*.parquet
