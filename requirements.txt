@@ -13,3 +13,5 @@ customerio==2.1
 matplotlib
 seaborn
 scipy
+plotly
+sklearn
