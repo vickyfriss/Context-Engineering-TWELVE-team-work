@@ -32,6 +32,13 @@ from classes.visual import Visual, DistributionPlot, DistributionPlotPersonality
 import utils.sentences as sentences
 from utils.gemini import convert_messages_format
 
+# Helper function to clean metric names for better display
+def clean_metric_name(name: str) -> str:
+    name = name.replace("_", " ")
+    if "pct" in name:
+        name = name.replace("pct", "").strip()
+        name = f"{name} (%)"
+    return name
 
 class Chat:
     function_names = []
@@ -462,7 +469,23 @@ class PersonChat(Chat):
 
             self.handle_input(x, stream=True)
 
+
 class TeamChat(Chat):
+
+    # Define which metrics are higher-is-better for quality
+    QUALITY_METRICS_INFO = {
+        "buildup_that_ends_with_finish_pct": True,
+        "turnover_pct_buildup": False,  # lower is better
+        "opp_box_entries_within_7s_after_turnover": False,  # lower is better
+        "opp_shot_probability_within_7s_after_turnover": False,  # lower is better
+        "first_line_break_pct_buildup": True,
+    }
+
+    STYLE_METRICS = [
+        "buildup_to_create_pct",
+        "buildup_to_direct_pct",
+    ]
+
     def __init__(self, chat_state_hash, team, teams, state="empty"):
         self.embeddings = TeamEmbeddings()
         self.team = team
@@ -478,35 +501,152 @@ class TeamChat(Chat):
             self.handle_input(x, stream=True)
 
     def instruction_messages(self):
-        first_messages = [
+        return [
             {"role": "system", "content": "You are a football build-up analyst."},
             {
                 "role": "user",
                 "content": (
-                    "After these messages you will be interacting with a user of a football analysis platform. "
-                    f"The user has selected the team {self.team.name}. "
-                    "All user messages will be prefixed with 'User:' and enclosed with ```. "
-                    "When responding to the user, speak directly to them. "
-                    "Use the information provided before the query to provide 2 sentence answers. "
-                    "Do not deviate from this information or add external facts."
+                    f"The user is asking about {self.team.name}.\n\n"
+
+                    "RULES:\n"
+                    "- Answer in MAX 2 sentences.\n"
+                    "- Use plain text only.\n"
+                    "- DO NOT use bullet points or lists.\n"
+                    "- DO NOT mention metrics that are not provided.\n\n"
+
+                    "STYLE METRICS (style only, NOT quality):\n"
+                    "- buildup to create (%)\n"
+                    "- buildup to direct (%)\n\n"
+
+                    "QUALITY METRICS (performance):\n"
+                    "- buildup that ends with finish (%) (higher is better)\n"
+                    "- turnover buildup (%) (lower is better)\n"
+                    "- opp box entries after turnover (lower is better)\n"
+                    "- opp shot probability after turnover (lower is better)\n"
+                    "- first line break (%) (higher is better)\n\n"
+
+                    "IMPORTANT:\n"
+                    "- If the user asks 'best', 'strongest', or 'good at' → ONLY use QUALITY metrics.\n"
+                    "- NEVER mention style metrics in that case.\n"
+                    "- Do NOT explain all metrics — summarise the key strength only."
                 ),
             },
         ]
-        return first_messages
 
+    # -----------------------
+    # 🔍 QUERY TYPES
+    # -----------------------
+    def is_comparison_query(self, query):
+        keywords = ["compare", "vs", "versus", "better", "worse", "than"]
+        return any(k in query.lower() for k in keywords)
+
+    def is_style_query(self, query):
+        keywords = ["style", "playstyle", "how do they play"]
+        return any(k in query.lower() for k in keywords)
+
+    def is_quality_query(self, query):
+        keywords = ["best", "strongest", "weakest", "worst", "strength", "good at"]
+        return any(k in query.lower() for k in keywords)
+
+    # -----------------------
+    # 🧾 TEAM DESCRIPTION (NO BULLETS)
+    # -----------------------
+    def get_team_description(self, team):
+        desc = f"{team.name}. "
+
+        # Style metrics
+        desc += "Style: "
+        for m in self.STYLE_METRICS:
+            value = team.ser_metrics.get(m + "_rank", None)
+            if value is not None:
+                desc += f"{clean_metric_name(m)} is ranked {round(value, 2)}. "
+
+        # Quality metrics
+        desc += "Quality: "
+        for m, higher_is_better in self.QUALITY_METRICS_INFO.items():
+            value = team.ser_metrics.get(m + "_rank", None)
+            if value is not None:
+                desc += f"{clean_metric_name(m)} is ranked {round(value, 2)}. "
+
+        return desc
+
+    # -----------------------
+    # 🤝 MULTI TEAM
+    # -----------------------
+    def extract_teams(self, query):
+        names = self.teams.df["team"].unique()
+        q = query.lower()
+        return [n for n in names if n.lower() in q]
+
+    def get_multiple_teams_info(self, query):
+        df = self.teams.df
+        teams = self.extract_teams(query)
+
+        if self.team.name not in teams:
+            teams.append(self.team.name)
+
+        if len(teams) == 1:
+            similar = (
+                df.copy()
+                .assign(sim=lambda x: (
+                    x[self.team.relevant_metrics] - self.team.ser_metrics
+                ).abs().sum(axis=1))
+                .sort_values("sim")
+            )
+            teams += similar["team"].iloc[1:3].tolist()
+
+        info = ""
+        for t in teams:
+            obj = self.teams.to_data_point_by_team(t)
+            info += f"{t}. "
+            info += self.get_team_description(obj)
+
+        return info
+
+    # -----------------------
+    # 🎯 MAIN CONTEXT
+    # -----------------------
     def get_relevant_info(self, query):
-        ret_val = "Here is a description of the team in terms of data:\n\n"
-        description = TeamDescription(self.team)
-        ret_val += description.synthesize_text()
 
-        results = self.embeddings.search(query, top_n=5)
-        ret_val += "\n\nHere is relevant information for answering the question:\n"
-        ret_val += "\n".join(results["assistant"].to_list())
+        # ---------------- COMPARISON ----------------
+        if self.is_comparison_query(query):
+            text = "Comparison data. "
+            text += self.get_multiple_teams_info(query)
+            return text
 
-        ret_val += "\n\nIf none of this is relevant, remind the user:\n"
-        ret_val += (
-            "This chat answers questions about a team's build-up metrics and what they imply about build-up style. "
-            "The user can select the team from the menu on the left."
-        )
+        # ---------------- QUALITY ----------------
+        elif self.is_quality_query(query):
+            text = f"{self.team.name} quality metrics. "
 
-        return ret_val
+            for m, higher_is_better in self.QUALITY_METRICS_INFO.items():
+                rank = self.team.ser_metrics.get(m + "_rank", None)
+                if rank is not None:
+                    # invert rank for metrics where lower is better
+                    effective_rank = rank if higher_is_better else 1 - rank
+
+                    # Convert to natural language
+                    if effective_rank >= 0.66:
+                        perf = "strong"
+                    elif effective_rank <= 0.33:
+                        perf = "weak"
+                    else:
+                        perf = "average"
+
+                    text += f"{clean_metric_name(m)} is {perf}. "
+
+        # ---------------- STYLE ----------------
+        elif self.is_style_query(query):
+            text = f"{self.team.name} style metrics. "
+            for m in self.STYLE_METRICS:
+                value = self.team.ser_metrics.get(m + "_rank", None)
+                if value is not None:
+                    text += f"{clean_metric_name(m)} is ranked {round(value, 2)}. "
+            return text
+
+        # ---------------- DEFAULT ----------------
+        else:
+            text = self.get_team_description(self.team)
+            results = self.embeddings.search(query, top_n=5)
+            insights = " ".join(results["assistant"].to_list())
+            text += " Insights: " + insights
+            return text

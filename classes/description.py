@@ -713,6 +713,16 @@ class PersonDescription(Description):
 class TeamDescription(Description):
     output_token_limit = 180
 
+    METRIC_MEANINGS = {
+        "buildup_that_ends_with_finish_pct": "the percentage of build-ups that result in a shot on goal",
+        "turnover_pct_buildup": "the percentage of build-ups that end in your team losing possession",
+        "opp_box_entries_within_7s_after_turnover": "the frequency opponents enter your penalty area within 7 seconds of a turnover",
+        "opp_shot_probability_within_7s_after_turnover": "the likelihood that opponents take a shot within 7 seconds after a turnover",
+        "first_line_break_pct_buildup": "how often your team breaks the first defensive line during build-up",
+        "buildup_to_create_pct": "the proportion of build-ups that aim to create scoring opportunities",
+        "buildup_to_direct_pct": "the proportion of build-ups that progress the ball quickly in a direct manner",
+    }
+
     @property
     def gpt_examples_path(self):
         return f"{self.gpt_examples_base}/team_buildup.xlsx"
@@ -743,27 +753,66 @@ class TeamDescription(Description):
             ]
         return intro
 
-    def synthesize_text(self) -> str:
+    def synthesize_text(self):
         team = self.team
         metrics = team.relevant_metrics
 
-        description = (
-            f"Here is a statistical description of {team.name} across the tournament, "
-            f"based on {team.minutes_played} minutes.\n\n"
-        )
+        description = f"{team.name} build-up profile:\n\n"
+
+        style_metrics = [
+            "buildup_to_create_pct",
+            "buildup_to_direct_pct",
+        ]
+
+        quality_metrics = [
+            "buildup_that_ends_with_finish_pct",
+            "turnover_pct_buildup",
+            "opp_box_entries_within_7s_after_turnover",
+            "opp_shot_probability_within_7s_after_turnover",
+            "first_line_break_pct_buildup",
+        ]
+
+        total_teams = getattr(team, "n_teams", 100)
+
+        def rank_to_percentile(rank):
+            try:
+                return int((1 - (rank - 1) / total_teams) * 100)
+            except:
+                return 50
+
+        # ----------------------- STYLE ----------------
+        description += "STYLE:\n"
+        for metric in metrics:
+            if metric in style_metrics:
+                rank = team.ser_metrics.get(metric + "_rank", None)
+                pct = rank_to_percentile(rank) if rank else 50
+                explanation = self.METRIC_MEANINGS.get(metric, "")
+                clean_name = metric.replace("_", " ").replace(" pct", "")
+                description += f"- {clean_name} (%): {pct}th percentile. {explanation}\n"
+
+        # ----------------------- QUALITY ----------------
+        description += "\nQUALITY:\n"
+        lower_is_better = [
+            "turnover_pct_buildup",
+            "opp_box_entries_within_7s_after_turnover",
+            "opp_shot_probability_within_7s_after_turnover",
+        ]
 
         for metric in metrics:
-            description += (
-                f"{team.name} was "
-                f"{sentences.describe_level(team.ser_metrics[metric + '_Z'])} "
-                f"in {sentences.write_out_metric(metric)} compared to other teams in the dataset. "
-            )
+            if metric in quality_metrics:
+                rank = team.ser_metrics.get(metric + "_rank", None)
+                pct = rank_to_percentile(rank) if rank else 50
+                direction = "lower is better" if metric in lower_is_better else "higher is better"
+                explanation = self.METRIC_MEANINGS.get(metric, "")
+                clean_name = metric.replace("_", " ").replace(" pct", "")
+                description += f"- {clean_name} (%): {pct}th percentile ({direction}). {explanation}\n"
 
         return description
 
     def get_prompt_messages(self) -> List[Dict[str, str]]:
         prompt = (
-            "Please use the statistical description enclosed with ``` to give a concise, 4 sentence summary of the team's build-up style. "
+            "Please use the statistical description enclosed with ``` to give a concise, 4 sentence summary of the team's build-up style. Just sentences, no bullets. "
+            "Use only the information given in the description to answer, do not make assumptions or add any information. Use only the metrics I gave you and no others. "
             "Sentence 1: overall style. "
             "Sentence 2: key strengths based on the metrics. "
             "Sentence 3: weaknesses or average areas based on the metrics. "
