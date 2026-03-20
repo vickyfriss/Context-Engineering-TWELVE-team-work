@@ -123,22 +123,63 @@ cmap = LinearSegmentedColormap.from_list(
     ["#d73027", "#ffffff", "#1a9850"],
 )
 
-fig, ax = plt.subplots(figsize=(10, 8))
+# Minimal style for no background
+sns.set_style("white")
+sns.set_context("notebook", font_scale=0.8)  # smaller global font
 
+# Use a narrower figure to occupy ~60% of page width
+fig_width = 6  # inches
+fig_height = 4.5  # proportionally smaller height
+fig, ax = plt.subplots(figsize=(fig_width, fig_height), facecolor="none")
+
+# Prepare readable labels
+def format_label(label):
+    has_pct = False
+    if "pct" in label:
+        has_pct = True
+        label = label.replace("pct", "").strip("_")
+    label = label.replace("_", " ").title()
+    if has_pct:
+        label += " (%)"
+    # Wrap long labels
+    if len(label) > 20:
+        parts = label.split(" ")
+        mid = len(parts) // 2
+        label = " ".join(parts[:mid]) + "\n" + " ".join(parts[mid:])
+    return label
+
+labels = [format_label(m) for m in metrics]
+
+# Draw heatmap
 sns.heatmap(
     corr_df,
     annot=True,
+    fmt=".2f",
     cmap=cmap,
     center=0,
     vmin=-1,
     vmax=1,
     linewidths=0.5,
-    ax=ax,
+    linecolor="lightgray",
+    square=True,
+    annot_kws={"size": 8, "weight": "bold"},  # smaller numbers
+    cbar_kws={"shrink": 0.7},
 )
 
-ax.set_title("Correlation Matrix – Team Build-Up Metrics")
+# Apply formatted labels
+ax.set_xticklabels(labels, rotation=45, ha="right", wrap=True)
+ax.set_yticklabels(labels, rotation=0, va="center")
 
-st.pyplot(fig)
+sns.despine(left=True, bottom=True)
+
+ax.set_title(
+    "Correlation Matrix – Team Build-Up Metrics",
+    fontsize=12,  # smaller title
+    weight="bold"
+)
+
+# Display figure in Streamlit, transparent background
+st.pyplot(fig, transparent=True)
 
 # Run chat interaction
 chat.get_input()
