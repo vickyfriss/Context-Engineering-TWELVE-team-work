@@ -49,11 +49,11 @@ style_metrics = [
 ]
 
 quality_metrics = [
+    "first_line_break_pct_buildup",
     "buildup_that_ends_with_finish_pct",
     "turnover_pct_buildup",
     "opp_box_entries_within_7s_after_turnover",
     "opp_shot_probability_within_7s_after_turnover",
-    "first_line_break_pct_buildup",
 ]
 
 # Metrics where lower values are better
@@ -101,17 +101,17 @@ chat = create_chat(to_hash, TeamChat, team, teams)
 if chat.state == "empty":
 
     # STYLE PLOT
-    style_plot = DistributionPlot(
-        columns=style_metrics[::-1],
-        labels=["Worse", "Average", "Better"],
-        plot_type="default",
-    )
-    style_plot.add_title(
-        title=f"{team.name} – Build-Up Style",
-        subtitle="How the team builds up play (z-scores)",
-    )
-    style_plot.add_players(teams, metrics=style_metrics)
-    style_plot.add_player(team, len(teams.df), metrics=style_metrics)
+#    style_plot = DistributionPlot(
+#        columns=style_metrics[::-1],
+#        labels=["Worse", "Average", "Better"],
+#        plot_type="default",
+#    )
+#    style_plot.add_title(
+#        title=f"{team.name} – Build-Up Style",
+#        subtitle="How the team builds up play (z-scores)",
+#    )
+#    style_plot.add_players(teams, metrics=style_metrics)
+#    style_plot.add_player(team, len(teams.df), metrics=style_metrics)
 
     # QUALITY PLOT
     quality_plot = DistributionPlot(
@@ -137,7 +137,7 @@ if chat.state == "empty":
         user_only=False,
         visible=False,
     )
-    chat.add_message(style_plot)
+#    chat.add_message(style_plot)
     chat.add_message(quality_plot)
     chat.add_message(summary)
 
