@@ -102,6 +102,29 @@ chat = create_chat(to_hash, TeamChat, team, teams)
 # -------------------------------
 if chat.state == "empty":
 
+    # Map each metric to a custom display name
+    display_names = {
+        "buildup_to_create_pct": "Buildup to Create (%)",
+        "buildup_to_direct_pct": "Buildup to Direct (%)",
+        "progression_to_midfield_pct": "Progression to Midfield (%)",
+        "buildup_that_ends_with_finish_pct": "Buildup Ending in Finish (%)",
+        "first_line_break_pct_buildup": "1st Line Break (%)",
+        "second_last_line_break_pct_buildup": "2nd Last Line Break (%)",
+        "turnover_pct_buildup": "Turnover (%)",
+        "opp_box_entries_within_7s_after_turnover": "Opp. Box Entries in 7s after Turnover",
+        "opp_shot_probability_within_7s_after_turnover": "Opp. Shot Prob in 7s after Turnover",
+        "prop_gk_involved": "Goalkeeper Involved (%)",
+        "avg_passes": "Avg Passes (#)",
+        "avg_duration": "Avg Duration (s)",
+        "avg_players_involved": "Avg Players Involved",
+        "build_ups_per_game": "Build-Ups per Game",
+        "prop_channel_center": "Central Channel (%)",
+        "prop_channel_half_space_left": "Left Half-Space (%)",
+        "prop_channel_wide_left": "Left Wide (%)",
+        "prop_channel_half_space_right": "Right Half-Space (%)",
+        "prop_channel_wide_right": "Right Wide (%)"
+    }
+
     # STYLE PLOT
 #    style_plot = DistributionPlot(
 #        columns=style_metrics[::-1],
@@ -120,13 +143,16 @@ if chat.state == "empty":
         columns=quality_metrics[::-1],
         labels=["Worse", "Average", "Better"],
         plot_type="default",
+        display_names=display_names  
     )
+
     quality_plot.add_title(
         title=f"{team.name} – Build-Up Quality",
         subtitle="Effectiveness and outcomes of build-up (z-scores)",
     )
     quality_plot.add_players(teams, metrics=quality_metrics)
     quality_plot.add_player(team, len(teams.df), metrics=quality_metrics)
+
 
     # Team summary
     description = TeamDescription(team)

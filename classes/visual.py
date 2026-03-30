@@ -157,18 +157,21 @@ class Visual:
 class DistributionPlot(Visual):
     """Distribution plot used for players, teams, and countries."""
 
-    def __init__(self, columns, labels=None, *args, **kwargs):
+    def __init__(self, columns, labels=None, display_names=None, *args, **kwargs):
         self.empty = True
         self.columns = columns
+        self.display_names = display_names or {}
+
         self.marker_color = (c for c in [Visual.white, Visual.bright_yellow, Visual.bright_blue])
         self.marker_shape = (s for s in ["square", "hexagon", "diamond"])
+
         super().__init__(*args, **kwargs)
 
         if labels is not None:
             self._setup_axes(labels)
         else:
             self._setup_axes()
-
+            
     def _setup_axes(self, labels=("Worse", "Average", "Better")):
         """Set x/y axes for distribution plot."""
         self.fig.update_xaxes(
@@ -244,7 +247,7 @@ class DistributionPlot(Visual):
         marker = next(self.marker_shape)
 
         for i, col in enumerate(self.columns):
-            metric_name = format_metric(col)
+            metric_name = self.display_names.get(col, format_metric(col))
 
             rank_val = int(ser_plot[col + hover])
             if n_group is not None:
