@@ -15,7 +15,7 @@ twelve_chat.bat
 *.env
 user_info.json
 clustering.ipynb
-buildup_metrics.csv
+#buildup_metrics.csv #Need to have it in Git as otherwise it won't be read by Streamlit when deploying app.
 secrets.toml
 /raw data/
 # Ignore all Parquet files and the dynamic_events_pl_24 directory
