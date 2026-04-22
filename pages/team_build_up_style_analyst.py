@@ -12,7 +12,7 @@ from classes.data_source import TeamStats
 from classes.visual import DistributionPlot
 from classes.description import TeamDescription
 from classes.description import TeamStyleDescription
-from classes.chat import TeamChat
+from classes.chat import TeamBuildUpChat
 
 from utils.page_components import add_common_page_elements
 from utils.utils import create_chat
@@ -80,7 +80,7 @@ st.expander("Dataframe used", expanded=False).write(teams.df)
 # Chat setup
 # -------------------------------
 to_hash = (team.id, "team_build_up_analyst")
-chat = create_chat(to_hash, TeamChat, team, teams)
+chat = create_chat(to_hash, TeamBuildUpChat, team, teams)
 
 # -------------------------------
 # Initial chat content

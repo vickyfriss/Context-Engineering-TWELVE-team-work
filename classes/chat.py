@@ -4,7 +4,7 @@ from itertools import groupby
 from types import GeneratorType
 import pandas as pd
 import json
-from classes.description import TeamDescription
+from classes.description import TeamDescription, TeamStyleDescription
 from classes.embeddings import TeamEmbeddings
 
 from settings import USE_GEMINI
@@ -674,6 +674,348 @@ class PersonChat(Chat):
                 )
 
             self.handle_input(x, stream=True)
+
+
+class TeamBuildUpChat(Chat):
+    tools = [
+        {
+            "type": "function",
+            "name": "get_team_style_summary",
+            "description": "Returns a data-driven summary of the selected team's build-up style.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+        {
+            "type": "function",
+            "name": "compare_team_styles",
+            "description": "Compares the selected team's build-up style with another team.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "other_team_name": {
+                        "type": "string",
+                        "description": "The name of the other team to compare with the selected team.",
+                    }
+                },
+                "required": ["other_team_name"],
+            },
+        },
+    ]
+
+    STYLE_METRICS = [
+        "prop_direct",
+        "prop_goalkeeper_involved",
+        "avg_successful_passes",
+        "avg_phase_duration_seconds",
+        "avg_players_involved",
+        "build_ups_per_game",
+    ]
+
+    def __init__(self, chat_state_hash, team, teams, state="empty"):
+        self.team = team
+        self.teams = teams
+        super().__init__(chat_state_hash, state=state)
+
+    def get_input(self):
+        if x := st.chat_input(
+            placeholder=f"What else would you like to know about {self.team.name}'s build-up style?"
+        ):
+            if len(x) > 500:
+                st.error(
+                    f"Your message is too long ({len(x)} characters). Please keep it under 500 characters."
+                )
+            self.handle_input(x, stream=True)
+
+    def instruction_messages(self):
+        if USE_GEMINI or USE_LM_STUDIO:
+            return [
+                {"role": "system", "content": "You are a football build-up analyst."},
+                {
+                    "role": "user",
+                    "content": (
+                        f"The user has selected {self.team.name} and asks about team build-up style. "
+                        "Use only the provided style information and keep responses to 2 concise sentences."
+                    ),
+                },
+            ]
+
+        return [
+            {
+                "role": "system",
+                "content": (
+                    "You are a football build-up style analyst. "
+                    f"The selected team is {self.team.name}. "
+                    "Choose the tool that best fits the user's query to respond. "
+                    "- If the user asks for the selected team's style summary, use get_team_style_summary. "
+                    "- If the user asks to compare style with another team, use compare_team_styles with other_team_name. "
+                    "- If the user asks about a different scope than style, reply that this chat focuses on team build-up style. "
+                    "All user messages will be prefixed with 'User:' and enclosed with ```. "
+                    "When responding to the user, speak directly to them and keep responses to 2 concise sentences. "
+                    "Do not add information beyond the function output."
+                ),
+            }
+        ]
+
+    def _format_team_metrics(self, team):
+        """Format actual metric values for LLM context."""
+        style_desc = TeamStyleDescription(team)
+        lines = [f"\nActual metrics for {team.name}:"]
+        
+        for metric in self.STYLE_METRICS:
+            actual_value = team.ser_metrics.get(metric)
+            if actual_value is None:
+                continue
+            readable_metric = style_desc.write_out_team_metric(metric)
+            # Format the value with appropriate precision
+            if isinstance(actual_value, float):
+                formatted_value = f"{actual_value:.2f}"
+            else:
+                formatted_value = str(actual_value)
+            lines.append(f"- {readable_metric}: {formatted_value}")
+        
+        return "\n".join(lines)
+
+    def _get_team_style_summary(self):
+        description = TeamStyleDescription(self.team).synthesize_text()
+        metrics = self._format_team_metrics(self.team)
+        return description + metrics
+
+    def _find_team_name(self, team_name):
+        if not team_name:
+            return None
+
+        all_names = self.teams.df["team"].dropna().astype(str).unique().tolist()
+        by_lower = {name.lower(): name for name in all_names}
+        candidate = team_name.strip().lower()
+
+        if candidate in by_lower:
+            return by_lower[candidate]
+
+        partial_matches = [name for name in all_names if candidate in name.lower()]
+        if len(partial_matches) == 1:
+            return partial_matches[0]
+        return None
+
+    def _compare_team_styles(self, other_team_name):
+        matched_team_name = self._find_team_name(other_team_name)
+        if matched_team_name is None:
+            return (
+                f"I could not uniquely identify '{other_team_name}'. "
+                "Please provide the exact team name from the selector."
+            )
+
+        other_team = self.teams.to_data_point_by_team(matched_team_name)
+        selected_team = self.team
+
+        if matched_team_name.lower() == selected_team.name.lower():
+            return (
+                f"{selected_team.name} is the selected team, so there is no second team to compare. "
+                "Please provide a different team name."
+            )
+
+        style_description = TeamStyleDescription(selected_team)
+        selected_summary = TeamStyleDescription(selected_team).synthesize_text()
+        other_summary = TeamStyleDescription(other_team).synthesize_text()
+        selected_metrics = self._format_team_metrics(selected_team)
+        other_metrics = self._format_team_metrics(other_team)
+
+        metric_diffs = []
+        for metric in self.STYLE_METRICS:
+            selected_z = selected_team.ser_metrics.get(metric + "_Z", None)
+            other_z = other_team.ser_metrics.get(metric + "_Z", None)
+            if selected_z is None or other_z is None:
+                continue
+
+            metric_diffs.append(
+                {
+                    "metric": metric,
+                    "delta": float(selected_z - other_z),
+                }
+            )
+
+        metric_diffs = sorted(metric_diffs, key=lambda item: abs(item["delta"]), reverse=True)
+        top_diffs = metric_diffs[:3]
+
+        comparison_text = (
+            f"Selected team style summary:\n{selected_summary}{selected_metrics}\n\n"
+            f"Comparison team style summary ({other_team.name}):\n{other_summary}{other_metrics}"
+        )
+
+        if top_diffs:
+            key_differences = []
+            for item in top_diffs:
+                readable_metric = style_description.write_out_team_metric(item["metric"])
+                direction = selected_team.name if item["delta"] > 0 else other_team.name
+                key_differences.append(
+                    f"{direction} is higher in {readable_metric}"
+                )
+
+            comparison_text += "\n\nKey style differences: " + "; ".join(key_differences) + "."
+
+        return comparison_text
+
+    def _extract_other_team_from_query(self, query):
+        q = query.lower()
+        possible_names = self.teams.df["team"].dropna().astype(str).unique().tolist()
+        for name in possible_names:
+            lower_name = name.lower()
+            if lower_name in q and lower_name != self.team.name.lower():
+                return name
+        return None
+
+    def handle_input(self, input, reasoning_effort=None, temperature=1, stream=False):
+        if USE_GEMINI or USE_LM_STUDIO:
+            super().handle_input(
+                input,
+                reasoning_effort=reasoning_effort,
+                temperature=temperature,
+                stream=stream,
+            )
+            return
+
+        messages = self.instruction_messages()
+        messages = messages + self.messages_to_display.copy()
+        messages = [m for m in messages if isinstance(m["content"], str)]
+        messages.append({"role": "user", "content": f"```User: {input}```"})
+
+        self.messages_to_display.append({"role": "user", "content": input})
+
+        client = OpenAI(api_key=GPT_KEY, base_url=GPT_BASE)
+
+        r1 = client.responses.create(
+            model=GPT_CHAT_MODEL,
+            input=messages,
+            tools=self.tools,
+            tool_choice="auto",
+        )
+        fc = next((item for item in r1.output if item.type == "function_call"), None)
+
+        if fc is None:
+            st.expander("Chat transcript", expanded=False).write(
+                [
+                    {"role": m.get("role"), "content": m.get("content", "")}
+                    for m in messages
+                    if isinstance(m, dict)
+                ]
+            )
+            self.messages_to_display.append({"role": "assistant", "content": r1.output_text})
+            return
+
+        if fc.name == "get_team_style_summary":
+            result = self._get_team_style_summary()
+        else:
+            args = json.loads(fc.arguments)
+            result = self._compare_team_styles(args.get("other_team_name", ""))
+
+        tool_inputs = list(messages) + list(r1.output) + [
+            {"type": "function_call_output", "call_id": fc.call_id, "output": result}
+        ]
+
+        formatted = []
+        for item in tool_inputs:
+            if isinstance(item, dict):
+                if item.get("type") == "function_call_output":
+                    formatted.append(
+                        {"tool_result": item["output"] or "(empty)", "call_id": item["call_id"]}
+                    )
+                else:
+                    formatted.append({"role": item.get("role"), "content": item.get("content", "")})
+            elif hasattr(item, "type"):
+                if item.type == "function_call":
+                    formatted.append(
+                        {"tool_call": item.name, "arguments": json.loads(item.arguments)}
+                    )
+        st.expander("Chat transcript", expanded=False).write(formatted)
+
+        if stream:
+            if GPT_SUPPORTS_REASONING:
+                reasoning_effort = (
+                    reasoning_effort
+                    if reasoning_effort in GPT_AVAILABLE_REASONING_EFFORTS
+                    else GPT_AVAILABLE_REASONING_EFFORTS[0]
+                )
+                response_stream = client.responses.create(
+                    model=GPT_CHAT_MODEL,
+                    input=tool_inputs,
+                    tool_choice="none",
+                    tools=self.tools,
+                    reasoning={"effort": reasoning_effort},
+                    stream=True,
+                )
+            elif GPT_SUPPORTS_TEMPERATURE:
+                response_stream = client.responses.create(
+                    model=GPT_CHAT_MODEL,
+                    input=tool_inputs,
+                    tool_choice="none",
+                    tools=self.tools,
+                    temperature=temperature,
+                    stream=True,
+                )
+            else:
+                response_stream = client.responses.create(
+                    model=GPT_CHAT_MODEL,
+                    input=tool_inputs,
+                    tool_choice="none",
+                    tools=self.tools,
+                    stream=True,
+                )
+
+            def streamed_chunks():
+                for event in response_stream:
+                    if event.type == "response.output_text.delta":
+                        yield event.delta
+
+            answer = streamed_chunks()
+        else:
+            if GPT_SUPPORTS_REASONING:
+                reasoning_effort = (
+                    reasoning_effort
+                    if reasoning_effort in GPT_AVAILABLE_REASONING_EFFORTS
+                    else GPT_AVAILABLE_REASONING_EFFORTS[0]
+                )
+                response = client.responses.create(
+                    model=GPT_CHAT_MODEL,
+                    input=tool_inputs,
+                    tool_choice="none",
+                    tools=self.tools,
+                    reasoning={"effort": reasoning_effort},
+                )
+            elif GPT_SUPPORTS_TEMPERATURE:
+                response = client.responses.create(
+                    model=GPT_CHAT_MODEL,
+                    input=tool_inputs,
+                    tool_choice="none",
+                    tools=self.tools,
+                    temperature=temperature,
+                )
+            else:
+                response = client.responses.create(
+                    model=GPT_CHAT_MODEL,
+                    input=tool_inputs,
+                    tool_choice="none",
+                    tools=self.tools,
+                )
+            answer = response.output_text
+
+        self.messages_to_display.append({"role": "assistant", "content": answer})
+
+    def get_relevant_info(self, query):
+        if query == "":
+            query = self.messages_to_display[-1]["content"]
+
+        lower_query = query.lower()
+        compare_keywords = ["compare", "vs", "versus", "difference", "against"]
+        wants_comparison = any(keyword in lower_query for keyword in compare_keywords)
+
+        if wants_comparison:
+            other_team_name = self._extract_other_team_from_query(query)
+            if other_team_name:
+                return self._compare_team_styles(other_team_name)
+            return (
+                "Please include another team name if you want a style comparison. "
+                "I can then compare the selected team against that team."
+            )
+
+        return self._get_team_style_summary()
 
 
 class TeamChat(Chat):
