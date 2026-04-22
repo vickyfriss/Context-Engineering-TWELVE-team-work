@@ -1263,15 +1263,13 @@ class TeamChat(Chat):
         self.teams = teams
         super().__init__(chat_state_hash, state=state)
 
-        if "current_plot" not in st.session_state:
-            st.session_state.current_plot = None
-
-
+    # -----------------------
+    # TEAM MATCHING
+    # -----------------------
     def _find_team_name(self, team_name):
         if not team_name:
             return None
 
-        # all available team names
         names = (
             self.teams.df["team"]
             .dropna()
@@ -1280,23 +1278,17 @@ class TeamChat(Chat):
             .tolist()
         )
 
-        # exact match (case insensitive)
         by_lower = {n.lower(): n for n in names}
         candidate = team_name.strip().lower()
 
         if candidate in by_lower:
             return by_lower[candidate]
 
-        # partial match (e.g. "city" → "Manchester City")
         matches = [n for n in names if candidate in n.lower()]
-
-        if len(matches) == 1:
-            return matches[0]
-
-        return None
+        return matches[0] if len(matches) == 1 else None
 
     # -----------------------
-    # 🛡️ SAFE MESSAGES
+    # SAFE MESSAGES
     # -----------------------
     def _safe_messages(self, messages):
         safe = []
@@ -1313,6 +1305,28 @@ class TeamChat(Chat):
                 "content": content
             })
         return safe
+
+    # -----------------------
+    # 📊 CONSISTENT DF BUILDER
+    # -----------------------
+    def _build_single_df(self, team, metrics):
+        metrics = [m for m in metrics if m in team.ser_metrics.index]
+
+        return pd.DataFrame(
+            {team.name: [team.ser_metrics.get(m) for m in metrics]},
+            index=metrics
+        )
+
+    def _build_comparison_df(self, teams, metrics):
+        metrics = [m for m in metrics if m in teams[0].ser_metrics.index]
+
+        return pd.DataFrame(
+            {
+                t.name: [t.ser_metrics.get(m) for m in metrics]
+                for t in teams
+            },
+            index=metrics
+        )
 
     # -----------------------
     # INPUT
@@ -1352,81 +1366,49 @@ class TeamChat(Chat):
     # -----------------------
     def _get_team_style_summary(self):
         desc = TeamStyleDescription(self.team).synthesize_text()
-        metrics = self._format_style_metrics(self.team)
-
-        available = [m for m in self.STYLE_METRICS if m in self.team.ser_metrics.index]
-        df = self.team.ser_metrics[available]
-
-        st.session_state.current_plot = df
-        return desc + "\n" + metrics
+        df = self._build_single_df(self.team, self.STYLE_METRICS)
+        return desc, df
 
     def _compare_team_styles(self, other_team_name):
         matched = self._find_team_name(other_team_name)
         if not matched:
-            return f"I could not identify '{other_team_name}'."
+            return f"I could not identify '{other_team_name}'.", None
 
         other = self.teams.to_data_point_by_team(matched)
+        df = self._build_comparison_df([self.team, other], self.STYLE_METRICS)
 
-        metrics = [m for m in self.STYLE_METRICS if m in self.team.ser_metrics.index]
-
-        df = pd.DataFrame({
-            self.team.name: [self.team.ser_metrics.get(m) for m in metrics],
-            other.name: [other.ser_metrics.get(m) for m in metrics],
-        }, index=metrics)
-
-        st.session_state.current_plot = df
-        return f"Comparison between {self.team.name} and {other.name}."
+        return f"Comparison between {self.team.name} and {other.name}.", df
 
     # -----------------------
     # PERFORMANCE
     # -----------------------
     def _get_team_performance_summary(self):
-        metrics = self._format_performance_metrics(self.team)
-
-        available = [m for m in self.QUALITY_METRICS_INFO if m in self.team.ser_metrics.index]
-        df = self.team.ser_metrics[available]
-
-        st.session_state.current_plot = df
-        return metrics
+        df = self._build_single_df(
+            self.team,
+            list(self.QUALITY_METRICS_INFO.keys())
+        )
+        return "Performance overview.", df
 
     def _compare_team_performance(self, other_team_name):
         matched = self._find_team_name(other_team_name)
         if not matched:
-            return f"I could not identify '{other_team_name}'."
+            return f"I could not identify '{other_team_name}'.", None
 
         other = self.teams.to_data_point_by_team(matched)
-
-        metrics = [m for m in self.QUALITY_METRICS_INFO if m in self.team.ser_metrics.index]
-
-        df = pd.DataFrame({
-            self.team.name: [self.team.ser_metrics.get(m) for m in metrics],
-            other.name: [other.ser_metrics.get(m) for m in metrics],
-        }, index=metrics)
-
-        st.session_state.current_plot = df
-        return f"Comparison between {self.team.name} and {other.name}."
-
-    # -----------------------
-    # FORMATTERS
-    # -----------------------
-    def _format_style_metrics(self, team):
-        return "\n".join(
-            f"- {m}: {team.ser_metrics.get(m):.2f}"
-            for m in self.STYLE_METRICS
-            if team.ser_metrics.get(m) is not None
+        df = self._build_comparison_df(
+            [self.team, other],
+            list(self.QUALITY_METRICS_INFO.keys())
         )
 
-    def _format_performance_metrics(self, team):
-        return "\n".join(
-            f"- {m}: {team.ser_metrics.get(m):.2f}"
-            for m in self.QUALITY_METRICS_INFO
-            if team.ser_metrics.get(m) is not None
-        )
+        return f"Comparison between {self.team.name} and {other.name}.", df
 
     # -----------------------
     # MAIN HANDLER
     # -----------------------
     def handle_input(self, user_input):
+
+        with st.chat_message("user"):
+            st.write(user_input)
 
         messages = self.instruction_messages() + self.messages_to_display
         messages.append({"role": "user", "content": user_input})
@@ -1448,17 +1430,20 @@ class TeamChat(Chat):
             args = json.loads(fc.arguments) if fc.arguments else {}
 
             if fc.name == "get_team_style_summary":
-                result = self._get_team_style_summary()
-            elif fc.name == "compare_team_styles":
-                result = self._compare_team_styles(args.get("other_team_name"))
-            elif fc.name == "get_team_performance_summary":
-                result = self._get_team_performance_summary()
-            elif fc.name == "compare_team_performance":
-                result = self._compare_team_performance(args.get("other_team_name"))
-            else:
-                result = "Unsupported request."
+                text, plot_df = self._get_team_style_summary()
 
-            # 👉 extract correct tool call item
+            elif fc.name == "compare_team_styles":
+                text, plot_df = self._compare_team_styles(args.get("other_team_name"))
+
+            elif fc.name == "get_team_performance_summary":
+                text, plot_df = self._get_team_performance_summary()
+
+            elif fc.name == "compare_team_performance":
+                text, plot_df = self._compare_team_performance(args.get("other_team_name"))
+
+            else:
+                text, plot_df = "Unsupported request.", None
+
             tool_call_item = next(x for x in r1.output if x.type == "function_call")
 
             final = client.responses.create(
@@ -1474,24 +1459,24 @@ class TeamChat(Chat):
                     {
                         "type": "function_call_output",
                         "call_id": tool_call_item.call_id,
-                        "output": str(result),
+                        "output": str(text),
                     },
                 ],
             )
 
-            self.messages_to_display.append({
-                "role": "assistant",
-                "content": final.output_text
-            })
+            response_text = final.output_text
 
         else:
-            self.messages_to_display.append({
-                "role": "assistant",
-                "content": r1.output_text
-            })
+            response_text = r1.output_text
+            plot_df = None
 
-        # -----------------------
-        # 📊 SHOW PLOT
-        # -----------------------
-        if st.session_state.current_plot is not None:
-            st.bar_chart(st.session_state.current_plot)
+        with st.chat_message("assistant"):
+            st.write(response_text)
+
+            if plot_df is not None:
+                st.bar_chart(plot_df)
+
+        self.messages_to_display.append({
+            "role": "assistant",
+            "content": response_text
+        })
