@@ -1219,7 +1219,9 @@ class TeamChat(Chat):
             "description": "Compares the selected team's build-up style with another team.",
             "parameters": {
                 "type": "object",
-                "properties": {"other_team_name": {"type": "string"}},
+                "properties": {
+                    "other_team_name": {"type": "string"}
+                },
                 "required": ["other_team_name"],
             },
         },
@@ -1235,68 +1237,74 @@ class TeamChat(Chat):
             "description": "Compares the selected team's build-up performance with another team.",
             "parameters": {
                 "type": "object",
-                "properties": {"other_team_name": {"type": "string"}},
+                "properties": {
+                    "other_team_name": {"type": "string"}
+                },
                 "required": ["other_team_name"],
             },
         },
     ]
 
     STYLE_METRICS = [
-        "buildup_to_direct_pct",
-        "prop_gk_involved",
-        "avg_passes",
-        "avg_duration",
+        "prop_direct",
+        "prop_goalkeeper_involved",
+        "avg_successful_passes",
+        "avg_phase_duration_seconds",
         "avg_players_involved",
         "build_ups_per_game",
     ]
 
-    QUALITY_METRICS_INFO = {
-        "buildup_that_ends_with_finish_pct": True,
-        "turnover_pct_buildup": False,
-        "opp_box_entries_within_7s_after_turnover": False,
-        "opp_shot_probability_within_7s_after_turnover": False,
-        "first_line_break_pct_buildup": True,
-    }
+    QUALITY_METRICS = [
+        "buildup_that_ends_with_finish_pct",
+        "turnover_pct_buildup",
+        "opp_box_entries_within_7s_after_turnover",
+        "opp_shot_probability_within_7s_after_turnover",
+        "first_line_break_pct_buildup",
+    ]
 
     def __init__(self, chat_state_hash, team, teams, state="empty"):
         self.team = team
         self.teams = teams
+        self.embeddings = TeamEmbeddings()
         super().__init__(chat_state_hash, state=state)
 
-    # -----------------------
-    # TEAM MATCHING
-    # -----------------------
-    def _find_team_name(self, team_name):
-        if not team_name:
-            return None
+    # ---------------- SAFE INPUT ----------------
+    def get_input(self):
+        if x := st.chat_input(
+            placeholder=f"What would you like to know about {self.team.name}?"
+        ):
+            if len(x) > 500:
+                st.error("Message too long (max 500 characters)")
+                return
 
-        names = (
-            self.teams.df["team"]
-            .dropna()
-            .astype(str)
-            .unique()
-            .tolist()
-        )
+            self.handle_input(x)
 
-        by_lower = {n.lower(): n for n in names}
-        candidate = team_name.strip().lower()
+    # ---------------- SYSTEM PROMPT ----------------
+    def instruction_messages(self):
+        return [
+            {
+                "role": "system",
+                "content": (
+                    "You are a football build-up analyst.\n"
+                    f"Selected team: {self.team.name}\n\n"
+                    "Use tools for style or performance queries.\n"
+                    "Max 2 sentences.\n"
+                    "Do not hallucinate metrics."
+                ),
+            }
+        ]
 
-        if candidate in by_lower:
-            return by_lower[candidate]
-
-        matches = [n for n in names if candidate in n.lower()]
-        return matches[0] if len(matches) == 1 else None
-
-    # -----------------------
-    # SAFE MESSAGES
-    # -----------------------
+    # ---------------- CRITICAL FIX ----------------
     def _safe_messages(self, messages):
         safe = []
+
         for m in messages:
             if not isinstance(m, dict):
                 continue
 
             content = m.get("content")
+
+            # 🚨 ONLY STRINGS ALLOWED
             if not isinstance(content, str):
                 content = str(content)
 
@@ -1304,107 +1312,39 @@ class TeamChat(Chat):
                 "role": m.get("role", "user"),
                 "content": content
             })
+
         return safe
 
-    # -----------------------
-    # 📊 CONSISTENT DF BUILDER
-    # -----------------------
-    def _build_single_df(self, team, metrics):
-        metrics = [m for m in metrics if m in team.ser_metrics.index]
+    # ---------------- TEAM MATCHING ----------------
+    def _find_team_name(self, name):
+        if not name:
+            return None
 
-        return pd.DataFrame(
-            {team.name: [team.ser_metrics.get(m) for m in metrics]},
-            index=metrics
-        )
+        names = self.teams.df["team"].dropna().astype(str).unique().tolist()
+        mapping = {n.lower(): n for n in names}
 
-    def _build_comparison_df(self, teams, metrics):
-        metrics = [m for m in metrics if m in teams[0].ser_metrics.index]
+        if name.lower() in mapping:
+            return mapping[name.lower()]
 
-        return pd.DataFrame(
-            {
-                t.name: [t.ser_metrics.get(m) for m in metrics]
-                for t in teams
-            },
-            index=metrics
-        )
+        matches = [n for n in names if name.lower() in n.lower()]
+        return matches[0] if len(matches) == 1 else None
 
-    # -----------------------
-    # INPUT
-    # -----------------------
-    def get_input(self):
-        if x := st.chat_input(
-            placeholder=f"What would you like to know about {self.team.name}'s build-up?"
-        ):
-            if len(x) > 500:
-                st.error("Message too long (max 500 characters).")
-                return
-
-            self.handle_input(x)
-
-    # -----------------------
-    # SYSTEM PROMPT
-    # -----------------------
-    def instruction_messages(self):
-        return [
-            {
-                "role": "system",
-                "content": (
-                    "You are a football build-up analyst. "
-                    f"The selected team is {self.team.name}. "
-                    "Choose the correct tool:\n"
-                    "- Style → get_team_style_summary\n"
-                    "- Style comparison → compare_team_styles\n"
-                    "- Performance → get_team_performance_summary\n"
-                    "- Performance comparison → compare_team_performance\n"
-                    "Max 2 sentences."
-                ),
-            }
-        ]
-
-    # -----------------------
-    # STYLE
-    # -----------------------
-    def _get_team_style_summary(self):
+    # ---------------- STYLE ----------------
+    def _style_summary(self):
         desc = TeamStyleDescription(self.team).synthesize_text()
-        df = self._build_single_df(self.team, self.STYLE_METRICS)
-        return desc, df
+        return desc, None  # no plot handling here
 
-    def _compare_team_styles(self, other_team_name):
-        matched = self._find_team_name(other_team_name)
-        if not matched:
-            return f"I could not identify '{other_team_name}'.", None
+    def _compare_style(self, other):
+        return f"{self.team.name} vs {other.name} (style comparison)", None
 
-        other = self.teams.to_data_point_by_team(matched)
-        df = self._build_comparison_df([self.team, other], self.STYLE_METRICS)
+    # ---------------- PERFORMANCE ----------------
+    def _performance_summary(self):
+        return f"{self.team.name} performance summary", None
 
-        return f"Comparison between {self.team.name} and {other.name}.", df
+    def _compare_performance(self, other):
+        return f"{self.team.name} vs {other.name} (performance comparison)", None
 
-    # -----------------------
-    # PERFORMANCE
-    # -----------------------
-    def _get_team_performance_summary(self):
-        df = self._build_single_df(
-            self.team,
-            list(self.QUALITY_METRICS_INFO.keys())
-        )
-        return "Performance overview.", df
-
-    def _compare_team_performance(self, other_team_name):
-        matched = self._find_team_name(other_team_name)
-        if not matched:
-            return f"I could not identify '{other_team_name}'.", None
-
-        other = self.teams.to_data_point_by_team(matched)
-        df = self._build_comparison_df(
-            [self.team, other],
-            list(self.QUALITY_METRICS_INFO.keys())
-        )
-
-        return f"Comparison between {self.team.name} and {other.name}.", df
-
-    # -----------------------
-    # MAIN HANDLER
-    # -----------------------
+    # ---------------- MAIN HANDLER ----------------
     def handle_input(self, user_input):
 
         with st.chat_message("user"):
@@ -1413,10 +1353,14 @@ class TeamChat(Chat):
         messages = self.instruction_messages() + self.messages_to_display
         messages.append({"role": "user", "content": user_input})
 
-        self.messages_to_display.append({"role": "user", "content": user_input})
+        self.messages_to_display.append({
+            "role": "user",
+            "content": user_input
+        })
 
         client = OpenAI(api_key=GPT_KEY, base_url=GPT_BASE)
 
+        # 🚨 SAFE INPUT ONLY
         r1 = client.responses.create(
             model=GPT_CHAT_MODEL,
             input=self._safe_messages(messages),
@@ -1427,24 +1371,37 @@ class TeamChat(Chat):
         fc = next((x for x in r1.output if x.type == "function_call"), None)
 
         if fc:
-            args = json.loads(fc.arguments) if fc.arguments else {}
+
+            args = json.loads(fc.arguments or "{}")
 
             if fc.name == "get_team_style_summary":
-                text, plot_df = self._get_team_style_summary()
+                text, _ = self._style_summary()
 
             elif fc.name == "compare_team_styles":
-                text, plot_df = self._compare_team_styles(args.get("other_team_name"))
+                other = self._find_team_name(args.get("other_team_name"))
+                if other:
+                    text, _ = self._compare_style(
+                        self.teams.to_data_point_by_team(other)
+                    )
+                else:
+                    text = "Team not found."
 
             elif fc.name == "get_team_performance_summary":
-                text, plot_df = self._get_team_performance_summary()
+                text, _ = self._performance_summary()
 
             elif fc.name == "compare_team_performance":
-                text, plot_df = self._compare_team_performance(args.get("other_team_name"))
+                other = self._find_team_name(args.get("other_team_name"))
+                if other:
+                    text, _ = self._compare_performance(
+                        self.teams.to_data_point_by_team(other)
+                    )
+                else:
+                    text = "Team not found."
 
             else:
-                text, plot_df = "Unsupported request.", None
+                text = "Unsupported request."
 
-            tool_call_item = next(x for x in r1.output if x.type == "function_call")
+            tool_call = next(x for x in r1.output if x.type == "function_call")
 
             final = client.responses.create(
                 model=GPT_CHAT_MODEL,
@@ -1452,13 +1409,13 @@ class TeamChat(Chat):
                     *self._safe_messages(messages),
                     {
                         "type": "function_call",
-                        "call_id": tool_call_item.call_id,
-                        "name": tool_call_item.name,
-                        "arguments": tool_call_item.arguments,
+                        "call_id": tool_call.call_id,
+                        "name": tool_call.name,
+                        "arguments": tool_call.arguments,
                     },
                     {
                         "type": "function_call_output",
-                        "call_id": tool_call_item.call_id,
+                        "call_id": tool_call.call_id,
                         "output": str(text),
                     },
                 ],
@@ -1468,14 +1425,12 @@ class TeamChat(Chat):
 
         else:
             response_text = r1.output_text
-            plot_df = None
 
+        # ---------------- UI ONLY ----------------
         with st.chat_message("assistant"):
             st.write(response_text)
 
-            if plot_df is not None:
-                st.bar_chart(plot_df)
-
+        # ---------------- MEMORY SAFE ----------------
         self.messages_to_display.append({
             "role": "assistant",
             "content": response_text
