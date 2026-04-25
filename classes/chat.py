@@ -1202,7 +1202,6 @@ class TeamBuildUpChat(Chat):
 #             return text
 
 
-import json
 import streamlit as st
 from difflib import get_close_matches
 from openai import OpenAI
@@ -1210,43 +1209,6 @@ from openai import OpenAI
 
 class TeamChat(Chat):
 
-    # ---------------- TOOLS ----------------
-    tools = [
-        {
-            "type": "function",
-            "name": "summarise_style",
-            "description": "Summarises the selected team's build-up style.",
-            "parameters": {"type": "object", "properties": {}, "required": []},
-        },
-        {
-            "type": "function",
-            "name": "summarise_performance",
-            "description": "Summarises the selected team's build-up performance.",
-            "parameters": {"type": "object", "properties": {}, "required": []},
-        },
-        {
-            "type": "function",
-            "name": "compare_style",
-            "description": "Compare style with another team.",
-            "parameters": {
-                "type": "object",
-                "properties": {"other_team_name": {"type": "string"}},
-                "required": ["other_team_name"],
-            },
-        },
-        {
-            "type": "function",
-            "name": "compare_performance",
-            "description": "Compare performance with another team.",
-            "parameters": {
-                "type": "object",
-                "properties": {"other_team_name": {"type": "string"}},
-                "required": ["other_team_name"],
-            },
-        },
-    ]
-
-    # ---------------- METRICS ----------------
     STYLE_METRICS = [
         "prop_gk_involved",
         "avg_passes",
@@ -1260,19 +1222,24 @@ class TeamChat(Chat):
         "prop_channel_wide_right",
     ]
 
-    PERFORMANCE_METRICS = {
-        "buildup_that_ends_with_finish_pct": True,
-        "turnover_pct_buildup": False,
-        "opp_box_entries_within_7s_after_turnover": False,
-        "opp_shot_probability_within_7s_after_turnover": False,
-        "first_line_break_pct_buildup": True,
-    }
+    PERFORMANCE_METRICS = [
+        "first_line_break_pct_buildup",
+        "progression_to_midfield_pct",
+        "buildup_that_ends_with_finish_pct",
+        "turnover_pct_buildup",
+        "opp_box_entries_within_7s_after_turnover",
+        "opp_shot_probability_within_7s_after_turnover",
+    ]
 
-    # ---------------- INIT ----------------
+    NEGATIVE_METRICS = [
+        "turnover_pct_buildup",
+        "opp_box_entries_within_7s_after_turnover",
+        "opp_shot_probability_within_7s_after_turnover",
+    ]
+
     def __init__(self, chat_state_hash, team, teams, state="empty"):
         self.teams = teams
 
-        # 🔥 Persist team across reruns
         if "selected_team_name" not in st.session_state:
             st.session_state["selected_team_name"] = None
 
@@ -1290,57 +1257,114 @@ class TeamChat(Chat):
             if len(x) > 500:
                 st.error("Message too long.")
                 return
-            self.handle_input(x, stream=True)
+            self.handle_input(x)
 
     # ---------------- TEAM MATCHING ----------------
     def _match_team(self, query):
         names = self.teams.df["team"].dropna().tolist()
         q = query.lower()
 
-        # exact
         for n in names:
             if q == n.lower():
                 return n
 
-        # partial
         for n in names:
             if q in n.lower():
                 return n
 
-        # fuzzy
         matches = get_close_matches(query, names, n=1, cutoff=0.6)
         if matches:
             return matches[0]
 
         return None
 
+    # ---------------- CLEAN DATA (CRITICAL FIX) ----------------
+    def _filter_valid_teams(self, metrics):
+        return self.teams.df.dropna(subset=metrics)
+
     # ---------------- STYLE ----------------
     def _summarise_style(self):
         t = self.selected_team
+        metrics = self.STYLE_METRICS
+
+        clean_df = self._filter_valid_teams(metrics)
+
+        # temporarily replace df
+        original_df = self.teams.df
+        self.teams.df = clean_df
+
+        plot = DistributionPlot(
+            columns=metrics[::-1],
+            labels=["Worse", "Average", "Better"],
+            plot_type="default",
+        )
+
+        plot.add_title(
+            title=f"{t.name} – Build-Up Style",
+            subtitle="How the team builds up play (z-scores)",
+        )
+
+        plot.add_players(self.teams, metrics=metrics)
+        plot.add_player(t, len(clean_df), metrics=metrics)
+
+        # restore original df
+        self.teams.df = original_df
 
         passes = t.ser_metrics.get("avg_passes", 0)
         duration = t.ser_metrics.get("avg_duration", 0)
         central = t.ser_metrics.get("prop_channel_center", 0)
 
-        text = f"{t.name} tend to build up in a "
+        text = f"{t.name} tend to build up "
 
         if passes > 0.6:
-            text += "patient and possession-oriented way, "
+            text += "in a patient, possession-focused way"
         else:
-            text += "more direct manner, "
+            text += "more directly with quicker progression"
 
-        text += f"with sequences lasting around {round(duration, 2)} seconds. "
+        text += f", with sequences lasting around {round(duration, 2)} seconds. "
 
         if central > 0.5:
-            text += "They prefer progressing through central areas rather than using width."
+            text += "They favour central progression rather than using width."
         else:
-            text += "They make greater use of wide areas to advance the ball."
+            text += "They rely more on wide areas to advance the ball."
 
-        return text
+        return plot, text
 
     # ---------------- PERFORMANCE ----------------
     def _summarise_performance(self):
         t = self.selected_team
+        metrics = self.PERFORMANCE_METRICS
+
+        clean_df = self._filter_valid_teams(metrics)
+
+        original_df = self.teams.df
+        self.teams.df = clean_df
+
+        display_names = {
+            "progression_to_midfield_pct": "Progression to Midfield (%)",
+            "buildup_that_ends_with_finish_pct": "Buildup Ending in Finish (%)",
+            "turnover_pct_buildup": "Turnover (%)",
+            "opp_box_entries_within_7s_after_turnover": "Opp Box Entries After Turnover",
+            "opp_shot_probability_within_7s_after_turnover": "Opp Shot Probability After Turnover",
+            "first_line_break_pct_buildup": "First Line Break (%)",
+        }
+
+        plot = DistributionPlot(
+            columns=metrics[::-1],
+            labels=["Worse", "Average", "Better"],
+            plot_type="default",
+            display_names=display_names,
+        )
+
+        plot.add_title(
+            title=f"{t.name} – Build-Up Quality",
+            subtitle="Effectiveness and outcomes of build-up (z-scores)",
+        )
+
+        plot.add_players(self.teams, metrics=metrics)
+        plot.add_player(t, len(clean_df), metrics=metrics)
+
+        self.teams.df = original_df
 
         finish = t.ser_metrics.get("buildup_that_ends_with_finish_pct", 0)
         turnover = 1 - t.ser_metrics.get("turnover_pct_buildup", 0)
@@ -1348,60 +1372,27 @@ class TeamChat(Chat):
         text = f"{t.name} show "
 
         if finish > 0.66:
-            text += "strong attacking output from build-up, "
+            text += "strong attacking output from build-up"
         elif finish < 0.33:
-            text += "limited attacking output from build-up, "
+            text += "limited attacking threat from build-up"
         else:
-            text += "moderate attacking output, "
+            text += "moderate attacking output"
+
+        text += ", "
 
         if turnover > 0.66:
-            text += "while maintaining good security in possession."
+            text += "while remaining secure in possession."
         else:
-            text += "but remain vulnerable to turnovers under pressure."
+            text += "but are vulnerable to turnovers under pressure."
 
-        return text
-
-    # ---------------- COMPARISONS ----------------
-    def _compare_style(self, other_name):
-        other_name = self._match_team(other_name)
-        if not other_name:
-            return "I couldn’t recognise the comparison team."
-
-        other = self.teams.to_data_point_by_team(other_name)
-        t = self.selected_team
-
-        diff = t.ser_metrics["avg_passes"] - other.ser_metrics["avg_passes"]
-
-        if diff > 0:
-            return f"{t.name} build up more patiently than {other.name}, using longer passing sequences."
-        else:
-            return f"{other.name} build up more patiently than {t.name}, with more passes per sequence."
-
-    def _compare_performance(self, other_name):
-        other_name = self._match_team(other_name)
-        if not other_name:
-            return "I couldn’t recognise the comparison team."
-
-        other = self.teams.to_data_point_by_team(other_name)
-        t = self.selected_team
-
-        diff = (
-            t.ser_metrics["buildup_that_ends_with_finish_pct"]
-            - other.ser_metrics["buildup_that_ends_with_finish_pct"]
-        )
-
-        if diff > 0:
-            return f"{t.name} convert build-up into attacking situations more effectively than {other.name}."
-        else:
-            return f"{other.name} are more effective at turning build-up into attacking situations than {t.name}."
+        return plot, text
 
     # ---------------- HANDLE INPUT ----------------
-    def handle_input(self, input, stream=False, **kwargs):
+    def handle_input(self, input):
 
-        # Save user message
         self.messages_to_display.append({"role": "user", "content": input})
 
-        # ---------------- STEP 1: TEAM SELECTION ----------------
+        # TEAM SELECTION
         if self.selected_team is None:
             match = self._match_team(input)
 
@@ -1416,24 +1407,13 @@ class TeamChat(Chat):
             self.messages_to_display.append({"role": "assistant", "content": response})
             return
 
-        # ---------------- STEP 2: SIMPLE ROUTING (NO LLM CONFUSION) ----------------
         query = input.lower()
 
         if "style" in query:
-            result = self._summarise_style()
-
-        elif "performance" in query or "good" in query or "strong" in query:
-            result = self._summarise_performance()
-
-        elif "compare" in query:
-            words = query.split()
-            other_team = words[-1]  # simple heuristic
-            result = self._compare_performance(other_team)
-
+            plot, text = self._summarise_style()
         else:
-            result = self._summarise_performance()
+            plot, text = self._summarise_performance()
 
-        # ---------------- FINAL RESPONSE (LLM FOR POLISH) ----------------
         client = OpenAI(api_key=GPT_KEY, base_url=GPT_BASE)
 
         final = client.responses.create(
@@ -1441,12 +1421,11 @@ class TeamChat(Chat):
             input=[
                 {
                     "role": "system",
-                    "content": "Rewrite the following into 2 natural, fluid sentences as a football analyst.",
+                    "content": "Rewrite this into 2 natural, insightful sentences as a football analyst.",
                 },
-                {"role": "user", "content": result},
+                {"role": "user", "content": text},
             ],
         )
 
-        self.messages_to_display.append(
-            {"role": "assistant", "content": final.output_text}
-        )
+        self.messages_to_display.append({"role": "assistant", "content": plot})
+        self.messages_to_display.append({"role": "assistant", "content": final.output_text})
