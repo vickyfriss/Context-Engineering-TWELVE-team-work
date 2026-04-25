@@ -710,6 +710,8 @@ class TeamBuildUpChat(Chat):
         "build_ups_per_game",
     ]
 
+    
+
     def __init__(self, chat_state_hash, team, teams, state="empty"):
         self.team = team
         self.teams = teams
@@ -1018,183 +1020,432 @@ class TeamBuildUpChat(Chat):
         return self._get_team_style_summary()
 
 
+# class TeamChat(Chat):
+
+#     # Define which metrics are higher-is-better for quality
+#     QUALITY_METRICS_INFO = {
+#         "buildup_that_ends_with_finish_pct": True,
+#         "turnover_pct_buildup": False,  # lower is better
+#         "opp_box_entries_within_7s_after_turnover": False,  # lower is better
+#         "opp_shot_probability_within_7s_after_turnover": False,  # lower is better
+#         "first_line_break_pct_buildup": True,
+#     }
+
+#     STYLE_METRICS = [
+#         "buildup_to_create_pct",
+#         "buildup_to_direct_pct",
+#     ]
+
+#     def __init__(self, chat_state_hash, team, teams, state="empty"):
+#         self.embeddings = TeamEmbeddings()
+#         self.team = team
+#         self.teams = teams
+#         super().__init__(chat_state_hash, state=state)
+
+#     def get_input(self):
+#         if x := st.chat_input(
+#             placeholder=f"What else would you like to know about {self.team.name}'s build-up?"
+#         ):
+#             if len(x) > 500:
+#                 st.error(f"Your message is too long ({len(x)} characters). Please keep it under 500 characters.")
+#             self.handle_input(x, stream=True)
+
+#     def instruction_messages(self):
+#         return [
+#             {"role": "system", "content": "You are a football build-up analyst."},
+#             {
+#                 "role": "user",
+#                 "content": (
+#                     f"The user is asking about {self.team.name}.\n\n"
+
+#                     "RULES:\n"
+#                     "- Answer in MAX 2 sentences.\n"
+#                     "- Use plain text only.\n"
+#                     "- DO NOT use bullet points or lists.\n"
+#                     "- DO NOT mention metrics that are not provided.\n\n"
+
+#                     "STYLE METRICS (style only, NOT quality):\n"
+#                     "- buildup to create (%)\n"
+#                     "- buildup to direct (%)\n\n"
+
+#                     "QUALITY METRICS (performance):\n"
+#                     "- buildup that ends with finish (%) (higher is better)\n"
+#                     "- turnover buildup (%) (lower is better)\n"
+#                     "- opp box entries after turnover (lower is better)\n"
+#                     "- opp shot probability after turnover (lower is better)\n"
+#                     "- first line break (%) (higher is better)\n\n"
+
+#                     "IMPORTANT:\n"
+#                     "- If the user asks 'best', 'strongest', or 'good at' → ONLY use QUALITY metrics.\n"
+#                     "- NEVER mention style metrics in that case.\n"
+#                     "- Do NOT explain all metrics — summarise the key strength only."
+#                 ),
+#             },
+#         ]
+
+#     # -----------------------
+#     # 🔍 QUERY TYPES
+#     # -----------------------
+#     def is_comparison_query(self, query):
+#         keywords = ["compare", "vs", "versus", "better", "worse", "than"]
+#         return any(k in query.lower() for k in keywords)
+
+#     def is_style_query(self, query):
+#         keywords = ["style", "playstyle", "how do they play"]
+#         return any(k in query.lower() for k in keywords)
+
+#     def is_quality_query(self, query):
+#         keywords = ["best", "strongest", "weakest", "worst", "strength", "good at"]
+#         return any(k in query.lower() for k in keywords)
+
+#     # -----------------------
+#     # 🧾 TEAM DESCRIPTION (NO BULLETS)
+#     # -----------------------
+#     def get_team_description(self, team):
+#         desc = f"{team.name}. "
+
+# #        # Style metrics
+# #        desc += "Style: "
+# #        for m in self.STYLE_METRICS:
+# #            value = team.ser_metrics.get(m + "_rank", None)
+# #            if value is not None:
+# #                desc += f"{clean_metric_name(m)} is ranked {round(value, 2)}. "
+
+#         # Quality metrics
+#         desc += "Quality: "
+#         for m, higher_is_better in self.QUALITY_METRICS_INFO.items():
+#             value = team.ser_metrics.get(m + "_rank", None)
+#             if value is not None:
+#                 desc += f"{clean_metric_name(m)} is ranked {round(value, 2)}. "
+
+#         return desc
+
+#     # -----------------------
+#     # 🤝 MULTI TEAM
+#     # -----------------------
+#     def extract_teams(self, query):
+#         names = self.teams.df["team"].unique()
+#         q = query.lower()
+#         return [n for n in names if n.lower() in q]
+
+#     def get_multiple_teams_info(self, query):
+#         df = self.teams.df
+#         teams = self.extract_teams(query)
+
+#         if self.team.name not in teams:
+#             teams.append(self.team.name)
+
+#         if len(teams) == 1:
+#             similar = (
+#                 df.copy()
+#                 .assign(sim=lambda x: (
+#                     x[self.team.relevant_metrics] - self.team.ser_metrics
+#                 ).abs().sum(axis=1))
+#                 .sort_values("sim")
+#             )
+#             teams += similar["team"].iloc[1:3].tolist()
+
+#         info = ""
+#         for t in teams:
+#             obj = self.teams.to_data_point_by_team(t)
+#             info += f"{t}. "
+#             info += self.get_team_description(obj)
+
+#         return info
+
+#     # -----------------------
+#     # 🎯 MAIN CONTEXT
+#     # -----------------------
+#     def get_relevant_info(self, query):
+
+#         # ---------------- COMPARISON ----------------
+#         if self.is_comparison_query(query):
+#             text = "Comparison data. "
+#             text += self.get_multiple_teams_info(query)
+#             return text
+
+#         # ---------------- QUALITY ----------------
+#         elif self.is_quality_query(query):
+#             text = f"{self.team.name} quality metrics. "
+
+#             for m, higher_is_better in self.QUALITY_METRICS_INFO.items():
+#                 rank = self.team.ser_metrics.get(m + "_rank", None)
+#                 if rank is not None:
+#                     # invert rank for metrics where lower is better
+#                     effective_rank = rank if higher_is_better else 1 - rank
+
+#                     # Convert to natural language
+#                     if effective_rank >= 0.66:
+#                         perf = "strong"
+#                     elif effective_rank <= 0.33:
+#                         perf = "weak"
+#                     else:
+#                         perf = "average"
+
+#                     text += f"{clean_metric_name(m)} is {perf}. "
+
+# #        # ---------------- STYLE ----------------
+# #        elif self.is_style_query(query):
+# #            text = f"{self.team.name} style metrics. "
+# #            for m in self.STYLE_METRICS:
+# #                value = self.team.ser_metrics.get(m + "_rank", None)
+# #                if value is not None:
+# #                    text += f"{clean_metric_name(m)} is ranked {round(value, 2)}. "
+# #            return text
+
+#         # ---------------- DEFAULT ----------------
+#         else:
+#             text = self.get_team_description(self.team)
+#             results = self.embeddings.search(query, top_n=5)
+#             insights = " ".join(results["assistant"].to_list())
+#             text += " Insights: " + insights
+#             return text
+
+
+
+
 class TeamChat(Chat):
 
-    # Define which metrics are higher-is-better for quality
-    QUALITY_METRICS_INFO = {
+    tools = [
+        {
+            "type": "function",
+            "name": "summarise_style",
+            "description": "Returns a natural language summary of the selected team's build-up style.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+        {
+            "type": "function",
+            "name": "summarise_performance",
+            "description": "Returns a natural language summary of the selected team's build-up performance.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+        {
+            "type": "function",
+            "name": "compare_style",
+            "description": "Compares build-up style between the selected team and another team.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "other_team_name": {"type": "string"},
+                },
+                "required": ["other_team_name"],
+            },
+        },
+        {
+            "type": "function",
+            "name": "compare_performance",
+            "description": "Compares build-up performance between the selected team and another team.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "other_team_name": {"type": "string"},
+                },
+                "required": ["other_team_name"],
+            },
+        },
+    ]
+
+    # ---------------- METRICS ----------------
+    STYLE_METRICS = [
+        "prop_gk_involved",
+        "avg_passes",
+        "avg_duration",
+        "avg_players_involved",
+        "build_ups_per_game",
+        "prop_channel_center",
+        "prop_channel_half_space_left",
+        "prop_channel_wide_left",
+        "prop_channel_half_space_right",
+        "prop_channel_wide_right",
+    ]
+
+    PERFORMANCE_METRICS = {
         "buildup_that_ends_with_finish_pct": True,
-        "turnover_pct_buildup": False,  # lower is better
-        "opp_box_entries_within_7s_after_turnover": False,  # lower is better
-        "opp_shot_probability_within_7s_after_turnover": False,  # lower is better
+        "turnover_pct_buildup": False,
+        "opp_box_entries_within_7s_after_turnover": False,
+        "opp_shot_probability_within_7s_after_turnover": False,
         "first_line_break_pct_buildup": True,
     }
 
-    STYLE_METRICS = [
-        "buildup_to_create_pct",
-        "buildup_to_direct_pct",
-    ]
-
     def __init__(self, chat_state_hash, team, teams, state="empty"):
-        self.embeddings = TeamEmbeddings()
         self.team = team
         self.teams = teams
         super().__init__(chat_state_hash, state=state)
 
+    # ---------------- INPUT ----------------
     def get_input(self):
         if x := st.chat_input(
-            placeholder=f"What else would you like to know about {self.team.name}'s build-up?"
+            placeholder=f"What would you like to know about {self.team.name}?"
         ):
             if len(x) > 500:
-                st.error(f"Your message is too long ({len(x)} characters). Please keep it under 500 characters.")
+                st.error("Message too long (max 500 chars).")
+                return
             self.handle_input(x, stream=True)
 
+    # ---------------- INSTRUCTIONS ----------------
     def instruction_messages(self):
         return [
-            {"role": "system", "content": "You are a football build-up analyst."},
             {
-                "role": "user",
+                "role": "system",
                 "content": (
-                    f"The user is asking about {self.team.name}.\n\n"
-
-                    "RULES:\n"
-                    "- Answer in MAX 2 sentences.\n"
-                    "- Use plain text only.\n"
-                    "- DO NOT use bullet points or lists.\n"
-                    "- DO NOT mention metrics that are not provided.\n\n"
-
-                    "STYLE METRICS (style only, NOT quality):\n"
-                    "- buildup to create (%)\n"
-                    "- buildup to direct (%)\n\n"
-
-                    "QUALITY METRICS (performance):\n"
-                    "- buildup that ends with finish (%) (higher is better)\n"
-                    "- turnover buildup (%) (lower is better)\n"
-                    "- opp box entries after turnover (lower is better)\n"
-                    "- opp shot probability after turnover (lower is better)\n"
-                    "- first line break (%) (higher is better)\n\n"
-
-                    "IMPORTANT:\n"
-                    "- If the user asks 'best', 'strongest', or 'good at' → ONLY use QUALITY metrics.\n"
-                    "- NEVER mention style metrics in that case.\n"
-                    "- Do NOT explain all metrics — summarise the key strength only."
+                    "You are a football data analyst. "
+                    "Turn structured data into clear, natural language insights. "
+                    "Always respond in 2 concise sentences. "
+                    "Do not use bullet points or lists."
                 ),
-            },
+            }
         ]
 
-    # -----------------------
-    # 🔍 QUERY TYPES
-    # -----------------------
-    def is_comparison_query(self, query):
-        keywords = ["compare", "vs", "versus", "better", "worse", "than"]
-        return any(k in query.lower() for k in keywords)
+    # ---------------- HELPERS ----------------
+    def _find_team(self, name):
+        if not name:
+            return None
 
-    def is_style_query(self, query):
-        keywords = ["style", "playstyle", "how do they play"]
-        return any(k in query.lower() for k in keywords)
+        names = self.teams.df["team"].dropna().tolist()
+        lower_map = {n.lower(): n for n in names}
 
-    def is_quality_query(self, query):
-        keywords = ["best", "strongest", "weakest", "worst", "strength", "good at"]
-        return any(k in query.lower() for k in keywords)
+        if name.lower() in lower_map:
+            return self.teams.to_data_point_by_team(lower_map[name.lower()])
 
-    # -----------------------
-    # 🧾 TEAM DESCRIPTION (NO BULLETS)
-    # -----------------------
-    def get_team_description(self, team):
-        desc = f"{team.name}. "
+        matches = [n for n in names if name.lower() in n.lower()]
+        if len(matches) == 1:
+            return self.teams.to_data_point_by_team(matches[0])
 
-#        # Style metrics
-#        desc += "Style: "
-#        for m in self.STYLE_METRICS:
-#            value = team.ser_metrics.get(m + "_rank", None)
-#            if value is not None:
-#                desc += f"{clean_metric_name(m)} is ranked {round(value, 2)}. "
+        return None
 
-        # Quality metrics
-        desc += "Quality: "
-        for m, higher_is_better in self.QUALITY_METRICS_INFO.items():
-            value = team.ser_metrics.get(m + "_rank", None)
-            if value is not None:
-                desc += f"{clean_metric_name(m)} is ranked {round(value, 2)}. "
+    # ---------------- STYLE ----------------
+    def _summarise_style(self):
+        text = f"{self.team.name} build-up style. "
 
-        return desc
+        for m in self.STYLE_METRICS:
+            v = self.team.ser_metrics.get(m)
+            if v is not None:
+                text += f"{m}: {round(v, 3)}. "
 
-    # -----------------------
-    # 🤝 MULTI TEAM
-    # -----------------------
-    def extract_teams(self, query):
-        names = self.teams.df["team"].unique()
-        q = query.lower()
-        return [n for n in names if n.lower() in q]
+        return text
 
-    def get_multiple_teams_info(self, query):
-        df = self.teams.df
-        teams = self.extract_teams(query)
+    def _compare_style(self, other_team_name):
+        other = self._find_team(other_team_name)
+        if not other:
+            return f"Could not identify '{other_team_name}'."
 
-        if self.team.name not in teams:
-            teams.append(self.team.name)
+        text = f"Style comparison between {self.team.name} and {other.name}. "
 
-        if len(teams) == 1:
-            similar = (
-                df.copy()
-                .assign(sim=lambda x: (
-                    x[self.team.relevant_metrics] - self.team.ser_metrics
-                ).abs().sum(axis=1))
-                .sort_values("sim")
-            )
-            teams += similar["team"].iloc[1:3].tolist()
+        for m in self.STYLE_METRICS:
+            a = self.team.ser_metrics.get(m)
+            b = other.ser_metrics.get(m)
+            if a is None or b is None:
+                continue
 
-        info = ""
-        for t in teams:
-            obj = self.teams.to_data_point_by_team(t)
-            info += f"{t}. "
-            info += self.get_team_description(obj)
+            diff = a - b
+            text += f"{m} difference: {round(diff, 3)}. "
 
-        return info
+        return text
 
-    # -----------------------
-    # 🎯 MAIN CONTEXT
-    # -----------------------
+    # ---------------- PERFORMANCE ----------------
+    def _summarise_performance(self):
+        text = f"{self.team.name} build-up performance. "
+
+        for m, higher_is_better in self.PERFORMANCE_METRICS.items():
+            v = self.team.ser_metrics.get(m)
+            if v is None:
+                continue
+
+            if not higher_is_better:
+                v = 1 - v
+
+            text += f"{m}: {round(v, 3)}. "
+
+        return text
+
+    def _compare_performance(self, other_team_name):
+        other = self._find_team(other_team_name)
+        if not other:
+            return f"Could not identify '{other_team_name}'."
+
+        text = f"Performance comparison between {self.team.name} and {other.name}. "
+
+        for m, higher_is_better in self.PERFORMANCE_METRICS.items():
+            a = self.team.ser_metrics.get(m)
+            b = other.ser_metrics.get(m)
+
+            if a is None or b is None:
+                continue
+
+            if not higher_is_better:
+                a, b = 1 - a, 1 - b
+
+            diff = a - b
+            text += f"{m} difference: {round(diff, 3)}. "
+
+        return text
+
+    # ---------------- CORE FIX (IMPORTANT) ----------------
     def get_relevant_info(self, query):
+        return f"Selected team: {self.team.name}"
 
-        # ---------------- COMPARISON ----------------
-        if self.is_comparison_query(query):
-            text = "Comparison data. "
-            text += self.get_multiple_teams_info(query)
-            return text
+    # ---------------- HANDLER ----------------
+    def handle_input(self, input, reasoning_effort=None, temperature=1, stream=False):
 
-        # ---------------- QUALITY ----------------
-        elif self.is_quality_query(query):
-            text = f"{self.team.name} quality metrics. "
+        messages = self.instruction_messages()
+        messages = messages + self.messages_to_display.copy()
+        messages = [m for m in messages if isinstance(m["content"], str)]
+        messages.append({"role": "user", "content": f"```User: {input}```"})
 
-            for m, higher_is_better in self.QUALITY_METRICS_INFO.items():
-                rank = self.team.ser_metrics.get(m + "_rank", None)
-                if rank is not None:
-                    # invert rank for metrics where lower is better
-                    effective_rank = rank if higher_is_better else 1 - rank
+        self.messages_to_display.append({"role": "user", "content": input})
 
-                    # Convert to natural language
-                    if effective_rank >= 0.66:
-                        perf = "strong"
-                    elif effective_rank <= 0.33:
-                        perf = "weak"
-                    else:
-                        perf = "average"
+        client = OpenAI(api_key=GPT_KEY, base_url=GPT_BASE)
 
-                    text += f"{clean_metric_name(m)} is {perf}. "
+        r1 = client.responses.create(
+            model=GPT_CHAT_MODEL,
+            input=messages,
+            tools=self.tools,
+            tool_choice="auto",
+        )
 
-#        # ---------------- STYLE ----------------
-#        elif self.is_style_query(query):
-#            text = f"{self.team.name} style metrics. "
-#            for m in self.STYLE_METRICS:
-#                value = self.team.ser_metrics.get(m + "_rank", None)
-#                if value is not None:
-#                    text += f"{clean_metric_name(m)} is ranked {round(value, 2)}. "
-#            return text
+        fc = next((x for x in r1.output if x.type == "function_call"), None)
 
-        # ---------------- DEFAULT ----------------
+        if fc is None:
+            self.messages_to_display.append(
+                {"role": "assistant", "content": r1.output_text}
+            )
+            return
+
+        args = json.loads(fc.arguments or "{}")
+
+        if fc.name == "summarise_style":
+            result = self._summarise_style()
+
+        elif fc.name == "summarise_performance":
+            result = self._summarise_performance()
+
+        elif fc.name == "compare_style":
+            result = self._compare_style(args.get("other_team_name"))
+
+        elif fc.name == "compare_performance":
+            result = self._compare_performance(args.get("other_team_name"))
+
         else:
-            text = self.get_team_description(self.team)
-            results = self.embeddings.search(query, top_n=5)
-            insights = " ".join(results["assistant"].to_list())
-            text += " Insights: " + insights
-            return text
+            result = "Unsupported tool."
+
+        final = client.responses.create(
+            model=GPT_CHAT_MODEL,
+            input=[
+                *messages,
+                {
+                    "type": "function_call",
+                    "call_id": fc.call_id,
+                    "name": fc.name,
+                    "arguments": fc.arguments,
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": fc.call_id,
+                    "output": result,
+                },
+            ],
+        )
+
+        self.messages_to_display.append(
+            {"role": "assistant", "content": final.output_text}
+        )
