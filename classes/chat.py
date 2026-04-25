@@ -1209,44 +1209,57 @@ class TeamChat(Chat):
     tools = [
         {
             "type": "function",
-            "name": "get_team_style_summary",
-            "description": "Returns a data-driven summary of the selected team's build-up style.",
+            "name": "summarise_style",
+            "description": "Returns a natural language summary of the selected team's build-up style.",
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
         {
             "type": "function",
-            "name": "compare_team_styles",
-            "description": "Compares the selected team's build-up style with another team.",
+            "name": "summarise_performance",
+            "description": "Returns a natural language summary of the selected team's build-up performance.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+        {
+            "type": "function",
+            "name": "compare_style",
+            "description": "Compares build-up style between the selected team and another team.",
             "parameters": {
                 "type": "object",
-                "properties": {"other_team_name": {"type": "string"}},
+                "properties": {
+                    "other_team_name": {"type": "string"},
+                },
                 "required": ["other_team_name"],
             },
         },
         {
             "type": "function",
-            "name": "get_team_performance_summary",
-            "description": "Returns a data-driven summary of the selected team's build-up performance.",
-            "parameters": {"type": "object", "properties": {}, "required": []},
-        },
-        {
-            "type": "function",
-            "name": "compare_team_performance",
-            "description": "Compares the selected team's build-up performance with another team.",
+            "name": "compare_performance",
+            "description": "Compares build-up performance between the selected team and another team.",
             "parameters": {
                 "type": "object",
-                "properties": {"other_team_name": {"type": "string"}},
+                "properties": {
+                    "other_team_name": {"type": "string"},
+                },
                 "required": ["other_team_name"],
             },
         },
     ]
 
+    # ---------------- METRICS ----------------
     STYLE_METRICS = [
-        "buildup_to_create_pct",
-        "buildup_to_direct_pct",
+        "prop_gk_involved",
+        "avg_passes",
+        "avg_duration",
+        "avg_players_involved",
+        "build_ups_per_game",
+        "prop_channel_center",
+        "prop_channel_half_space_left",
+        "prop_channel_wide_left",
+        "prop_channel_half_space_right",
+        "prop_channel_wide_right",
     ]
 
-    QUALITY_METRICS_INFO = {
+    PERFORMANCE_METRICS = {
         "buildup_that_ends_with_finish_pct": True,
         "turnover_pct_buildup": False,
         "opp_box_entries_within_7s_after_turnover": False,
@@ -1257,10 +1270,9 @@ class TeamChat(Chat):
     def __init__(self, chat_state_hash, team, teams, state="empty"):
         self.team = team
         self.teams = teams
-        self.embeddings = TeamEmbeddings()
         super().__init__(chat_state_hash, state=state)
 
-    # ---------------- SAFE INPUT ----------------
+    # ---------------- INPUT ----------------
     def get_input(self):
         if x := st.chat_input(
             placeholder=f"What would you like to know about {self.team.name}?"
@@ -1268,116 +1280,32 @@ class TeamChat(Chat):
             if len(x) > 500:
                 st.error("Message too long (max 500 chars).")
                 return
-            self.handle_input(x)
+            self.handle_input(x, stream=True)
 
-    # ---------------- SAFE MESSAGE CLEANER (FIX FOR YOUR ERROR) ----------------
-    def _safe_messages(self, messages):
-        safe = []
-        for m in messages:
-            if not isinstance(m, dict):
-                continue
-
-            content = m.get("content")
-
-            # CRITICAL FIX: remove DistributionPlot / df / objects
-            if not isinstance(content, str):
-                content = str(content)
-
-            safe.append({
-                "role": m.get("role", "user"),
-                "content": content
-            })
-
-        return safe
-
-    # ---------------- SYSTEM PROMPT ----------------
+    # ---------------- INSTRUCTIONS ----------------
     def instruction_messages(self):
         return [
             {
                 "role": "system",
                 "content": (
-                    f"You are a football build-up analyst for {self.team.name}.\n"
-                    "You can answer style and performance questions.\n"
-                    "Use tools when appropriate.\n"
-                    "Max 2 sentences. No bullet points."
+                    "You are a football data analyst. "
+                    "Turn structured data into clear, natural language insights. "
+                    "Always respond in 2 concise sentences. "
+                    "Do not use bullet points or lists."
                 ),
             }
         ]
 
-    # ---------------- STYLE ----------------
-    def _get_team_style_summary(self):
-        desc = TeamStyleDescription(self.team).synthesize_text()
-
-        lines = [desc, "\nStyle metrics:"]
-        for m in self.STYLE_METRICS:
-            val = self.team.ser_metrics.get(m)
-            if val is not None:
-                lines.append(f"- {m}: {round(val, 2)}")
-
-        return "\n".join(lines)
-
-    def _compare_team_styles(self, other_team_name):
-        other = self._find_team(other_team_name)
-        if not other:
-            return f"Could not identify '{other_team_name}'."
-
-        t1, t2 = self.team, other
-        out = [f"Style comparison: {t1.name} vs {t2.name}"]
-
-        for m in self.STYLE_METRICS:
-            a = t1.ser_metrics.get(m)
-            b = t2.ser_metrics.get(m)
-            if a is None or b is None:
-                continue
-
-            better = t1.name if a > b else t2.name
-            out.append(f"{better} higher in {m}")
-
-        return "\n".join(out)
-
-    # ---------------- PERFORMANCE ----------------
-    def _get_team_performance_summary(self):
-        lines = [f"{self.team.name} performance summary:"]
-
-        for m, higher_is_better in self.QUALITY_METRICS_INFO.items():
-            val = self.team.ser_metrics.get(m)
-            if val is None:
-                continue
-
-            label = "strong" if val > 0.66 else "average" if val > 0.33 else "weak"
-            lines.append(f"- {m}: {label}")
-
-        return "\n".join(lines)
-
-    def _compare_team_performance(self, other_team_name):
-        other = self._find_team(other_team_name)
-        if not other:
-            return f"Could not identify '{other_team_name}'."
-
-        t1, t2 = self.team, other
-        out = [f"Performance comparison: {t1.name} vs {t2.name}"]
-
-        for m in self.QUALITY_METRICS_INFO:
-            a = t1.ser_metrics.get(m)
-            b = t2.ser_metrics.get(m)
-            if a is None or b is None:
-                continue
-
-            better = t1.name if a > b else t2.name
-            out.append(f"{better} stronger in {m}")
-
-        return "\n".join(out)
-
-    # ---------------- TEAM MATCHING ----------------
+    # ---------------- HELPERS ----------------
     def _find_team(self, name):
         if not name:
             return None
 
-        names = self.teams.df["team"].dropna().astype(str).unique().tolist()
-        lower = {n.lower(): n for n in names}
+        names = self.teams.df["team"].dropna().tolist()
+        lower_map = {n.lower(): n for n in names}
 
-        if name.lower() in lower:
-            return self.teams.to_data_point_by_team(lower[name.lower()])
+        if name.lower() in lower_map:
+            return self.teams.to_data_point_by_team(lower_map[name.lower()])
 
         matches = [n for n in names if name.lower() in n.lower()]
         if len(matches) == 1:
@@ -1385,18 +1313,86 @@ class TeamChat(Chat):
 
         return None
 
-    # ---------------- MAIN HANDLER ----------------
-    def handle_input(self, user_input):
+    # ---------------- STYLE ----------------
+    def _summarise_style(self):
+        text = f"{self.team.name} build-up style. "
 
-        messages = self._safe_messages(
-            self.instruction_messages() + self.messages_to_display + [
-                {"role": "user", "content": user_input}
-            ]
-        )
+        for m in self.STYLE_METRICS:
+            v = self.team.ser_metrics.get(m)
+            if v is not None:
+                text += f"{m}: {round(v, 3)}. "
 
-        self.messages_to_display.append(
-            {"role": "user", "content": user_input}
-        )
+        return text
+
+    def _compare_style(self, other_team_name):
+        other = self._find_team(other_team_name)
+        if not other:
+            return f"Could not identify '{other_team_name}'."
+
+        text = f"Style comparison between {self.team.name} and {other.name}. "
+
+        for m in self.STYLE_METRICS:
+            a = self.team.ser_metrics.get(m)
+            b = other.ser_metrics.get(m)
+            if a is None or b is None:
+                continue
+
+            diff = a - b
+            text += f"{m} difference: {round(diff, 3)}. "
+
+        return text
+
+    # ---------------- PERFORMANCE ----------------
+    def _summarise_performance(self):
+        text = f"{self.team.name} build-up performance. "
+
+        for m, higher_is_better in self.PERFORMANCE_METRICS.items():
+            v = self.team.ser_metrics.get(m)
+            if v is None:
+                continue
+
+            if not higher_is_better:
+                v = 1 - v
+
+            text += f"{m}: {round(v, 3)}. "
+
+        return text
+
+    def _compare_performance(self, other_team_name):
+        other = self._find_team(other_team_name)
+        if not other:
+            return f"Could not identify '{other_team_name}'."
+
+        text = f"Performance comparison between {self.team.name} and {other.name}. "
+
+        for m, higher_is_better in self.PERFORMANCE_METRICS.items():
+            a = self.team.ser_metrics.get(m)
+            b = other.ser_metrics.get(m)
+
+            if a is None or b is None:
+                continue
+
+            if not higher_is_better:
+                a, b = 1 - a, 1 - b
+
+            diff = a - b
+            text += f"{m} difference: {round(diff, 3)}. "
+
+        return text
+
+    # ---------------- CORE FIX (IMPORTANT) ----------------
+    def get_relevant_info(self, query):
+        return f"Selected team: {self.team.name}"
+
+    # ---------------- HANDLER ----------------
+    def handle_input(self, input, reasoning_effort=None, temperature=1, stream=False):
+
+        messages = self.instruction_messages()
+        messages = messages + self.messages_to_display.copy()
+        messages = [m for m in messages if isinstance(m["content"], str)]
+        messages.append({"role": "user", "content": f"```User: {input}```"})
+
+        self.messages_to_display.append({"role": "user", "content": input})
 
         client = OpenAI(api_key=GPT_KEY, base_url=GPT_BASE)
 
@@ -1409,25 +1405,25 @@ class TeamChat(Chat):
 
         fc = next((x for x in r1.output if x.type == "function_call"), None)
 
-        if not fc:
+        if fc is None:
             self.messages_to_display.append(
                 {"role": "assistant", "content": r1.output_text}
             )
             return
 
-        args = json.loads(fc.arguments) if fc.arguments else {}
+        args = json.loads(fc.arguments or "{}")
 
-        if fc.name == "get_team_style_summary":
-            result = self._get_team_style_summary()
+        if fc.name == "summarise_style":
+            result = self._summarise_style()
 
-        elif fc.name == "compare_team_styles":
-            result = self._compare_team_styles(args.get("other_team_name"))
+        elif fc.name == "summarise_performance":
+            result = self._summarise_performance()
 
-        elif fc.name == "get_team_performance_summary":
-            result = self._get_team_performance_summary()
+        elif fc.name == "compare_style":
+            result = self._compare_style(args.get("other_team_name"))
 
-        elif fc.name == "compare_team_performance":
-            result = self._compare_team_performance(args.get("other_team_name"))
+        elif fc.name == "compare_performance":
+            result = self._compare_performance(args.get("other_team_name"))
 
         else:
             result = "Unsupported tool."
