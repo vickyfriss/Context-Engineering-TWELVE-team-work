@@ -1215,9 +1215,9 @@ class TeamChat(Chat):
         "avg_duration",
         #"avg_players_involved",
         "build_ups_per_game",
-        "prop_channel_center",
-        "prop_channel_half_space_left",
         "prop_channel_wide_left",
+        "prop_channel_half_space_left",
+        "prop_channel_center",
         "prop_channel_half_space_right",
         "prop_channel_wide_right",
     ]
