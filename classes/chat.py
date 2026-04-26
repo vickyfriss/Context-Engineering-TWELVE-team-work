@@ -1310,21 +1310,42 @@ class TeamChat(Chat):
         return plot
 
     # ---------------- STYLE ----------------
+# ---------------- STYLE ----------------
     def _summarise_style(self, teams_list):
+
+        display_names = {
+            "prop_gk_involved": "Goalkeeper Involved (%)",
+            "avg_passes": "Avg Passes (#)",
+            "avg_duration": "Avg Duration (s)",
+            "avg_players_involved": "Avg Players Involved",
+            "build_ups_per_game": "Build-Ups per Game",
+            "prop_channel_center": "Central Channel (%)",
+            "prop_channel_half_space_left": "Left Half-Space (%)",
+            "prop_channel_wide_left": "Left Wide (%)",
+            "prop_channel_half_space_right": "Right Half-Space (%)",
+            "prop_channel_wide_right": "Right Wide (%)",
+        }
 
         plot = self._build_plot(
             teams_list,
             self.STYLE_METRICS,
             "Build-Up Style Comparison" if len(teams_list) > 1 else f"{teams_list[0].name} – Build-Up Style",
             "How teams build up play (z-scores)",
+            display_names,  # 👈 THIS IS THE KEY ADDITION
         )
 
         if len(teams_list) == 1:
             t = teams_list[0]
-            text = f"{t.name} build up patiently with controlled possession and structured progression, shaping attacks through deliberate passing patterns."
+            text = (
+                f"{t.name} build up patiently with controlled possession and structured progression, "
+                f"shaping attacks through deliberate passing patterns."
+            )
         else:
             names = ", ".join([t.name for t in teams_list])
-            text = f"{names} show contrasting build-up styles, differing in tempo, structure, and use of space, reflecting distinct tactical identities."
+            text = (
+                f"{names} show contrasting build-up styles, differing in tempo, structure, and use of space, "
+                f"reflecting distinct tactical identities."
+            )
 
         return plot, text
 
